@@ -1,4 +1,4 @@
-# Version: diagnostic template comparison
+# Version: explicit move icon crop diagnostics
 
 import cv2
 import numpy as np
@@ -26,8 +26,24 @@ ELEMENT_TEMPLATES = {
 }
 
 
-# The move bar contains 4 equal slots.
 MOVE_COUNT = 4
+
+# Explicit icon offsets from the detected move-bar origin.
+# These replace cumulative slot-width calculations so each
+# move icon has an independent, stable crop location.
+MOVE_ICON_OFFSETS_X = [
+    8,    # Move 1
+    202,  # Move 2
+    397,  # Move 3
+    592,  # Move 4
+]
+
+MOVE_ICON_OFFSET_Y = 12
+MOVE_ICON_WIDTH = 40
+MOVE_ICON_HEIGHT = 40
+
+# Diagnostic output directory.
+DEBUG_MOVE_DIR = "debug/moves"
 
 
 def load_element_templates():
@@ -93,10 +109,6 @@ def detect_element(icon, templates):
     best_element = None
     best_confidence = 0.0
 
-    # --------------------------------
-    # REMOVE YELLOW ENCHANT OVERLAY
-    # --------------------------------
-
     hsv = cv2.cvtColor(icon, cv2.COLOR_BGR2HSV)
 
     lower_yellow = np.array([15, 80, 100])
@@ -108,8 +120,6 @@ def detect_element(icon, templates):
         upper_yellow
     )
 
-    # Keep the original icon intact.
-    # Create a cleaned version only for enchanted icons.
     cleaned_icon = icon.copy()
 
     if cv2.countNonZero(yellow_mask) > 0:
@@ -120,10 +130,6 @@ def detect_element(icon, templates):
             3,
             cv2.INPAINT_TELEA
         )
-
-    # --------------------------------
-    # TEMPLATE SCALES
-    # --------------------------------
 
     scales = [
         0.70,
@@ -140,10 +146,6 @@ def detect_element(icon, templates):
         1.25,
         1.30,
     ]
-
-    # --------------------------------
-    # MATCH CLEANED ICON
-    # --------------------------------
 
     for element, original_template in templates.items():
 
@@ -163,9 +165,6 @@ def detect_element(icon, templates):
             if new_width < 5 or new_height < 5:
                 continue
 
-            # IMPORTANT:
-            # Never give matchTemplate a template
-            # larger than the icon.
             if (
                 new_width > cleaned_icon.shape[1]
                 or new_height > cleaned_icon.shape[0]
@@ -190,15 +189,6 @@ def detect_element(icon, templates):
 
                 best_confidence = confidence
                 best_element = element
-
-    # --------------------------------
-    # FALLBACK: ORIGINAL ICON
-    # --------------------------------
-    #
-    # This is important because the yellow
-    # removal can sometimes make a normal
-    # icon match worse.
-    #
 
     for element, original_template in templates.items():
 
@@ -388,6 +378,34 @@ def diagnose_element_matches(icon, templates):
     print("[DIAG] ------------------------------")
 
 
+def save_move_crop(move_number, icon, slot=None):
+    """
+    Saves the live move crop for visual inspection.
+    This is diagnostic only.
+    """
+
+    import os
+
+    os.makedirs(DEBUG_MOVE_DIR, exist_ok=True)
+
+    icon_path = (
+        f"{DEBUG_MOVE_DIR}/move_{move_number}_icon.png"
+    )
+
+    cv2.imwrite(icon_path, icon)
+
+    if slot is not None:
+        slot_path = (
+            f"{DEBUG_MOVE_DIR}/move_{move_number}_slot.png"
+        )
+        cv2.imwrite(slot_path, slot)
+
+    print(
+        f"[DIAG] Saved Move {move_number} crop: "
+        f"{icon_path}"
+    )
+
+
 def detect_moves():
 
     print("[MOVE] Scanning moves left to right...")
@@ -401,56 +419,64 @@ def detect_moves():
 
     templates = load_element_templates()
 
-    # moves.png is 779 x 74
-    bar_width = 779
-
-    # Four equal move slots
-    slot_width = bar_width / 4
-
     moves = []
 
-    for index in range(4):
+    for index in range(MOVE_COUNT):
 
         move_number = index + 1
 
-        slot_x = int(bar_x + (index * slot_width))
-        slot_y = bar_y
+        # Each move now has an explicit independent icon offset.
+        icon_x = bar_x + MOVE_ICON_OFFSETS_X[index]
+        icon_y = bar_y + MOVE_ICON_OFFSET_Y
 
-        # --------------------------------
-        # WHOLE MOVE SLOT
-        # --------------------------------
+        # Keep the original slot concept for enchanted detection.
+        # Slot boundaries are based on the midpoint between adjacent
+        # explicit icon origins, avoiding cumulative float rounding.
+        if index == 0:
+            slot_x = bar_x
+        else:
+            slot_x = (
+                bar_x
+                + (
+                    MOVE_ICON_OFFSETS_X[index - 1]
+                    + MOVE_ICON_WIDTH
+                )
+            )
+
+        if index < MOVE_COUNT - 1:
+            next_icon_x = (
+                bar_x
+                + MOVE_ICON_OFFSETS_X[index + 1]
+            )
+            slot_right = next_icon_x
+        else:
+            slot_right = bar_x + 779
+
+        slot_width = max(1, slot_right - slot_x)
 
         slot = frame[
-            slot_y:slot_y + 74,
-            slot_x:slot_x + int(slot_width)
+            bar_y:bar_y + 74,
+            slot_x:slot_x + slot_width
         ]
-
-        # --------------------------------
-        # CHECK ENCHANTED STATE
-        # --------------------------------
 
         enchanted = is_enchanted(slot)
 
-        # --------------------------------
-        # ICON ONLY
-        # --------------------------------
-
-        icon_x = slot_x + 8
-        icon_y = slot_y + 12
-
-        icon_width = 40
-        icon_height = 40
-
         icon = frame[
-            icon_y:icon_y + icon_height,
-            icon_x:icon_x + icon_width
+            icon_y:icon_y + MOVE_ICON_HEIGHT,
+            icon_x:icon_x + MOVE_ICON_WIDTH
         ]
 
         print(
             f"[MOVE] Move {move_number}: "
-            f"slot=({slot_x},{slot_y}) "
+            f"slot=({slot_x},{bar_y}) "
             f"icon=({icon_x},{icon_y}) "
             f"size={icon.shape[1]}x{icon.shape[0]}"
+        )
+
+        save_move_crop(
+            move_number,
+            icon,
+            slot
         )
 
         element, confidence = detect_element(
@@ -485,10 +511,10 @@ def detect_moves():
 
             moves.append(element)
 
-
     print(f"[MOVE] Moves = {moves}")
 
     return moves
+
 
 def is_enchanted(slot):
     """
@@ -498,7 +524,6 @@ def is_enchanted(slot):
 
     hsv = cv2.cvtColor(slot, cv2.COLOR_BGR2HSV)
 
-    # Yellow range
     lower_yellow = np.array([15, 80, 120])
     upper_yellow = np.array([40, 255, 255])
 
