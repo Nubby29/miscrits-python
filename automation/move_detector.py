@@ -1,4 +1,4 @@
-# Version: diagnostic move-icon crop logging
+# Version: diagnostic template comparison
 
 import cv2
 import numpy as np
@@ -246,6 +246,148 @@ def detect_element(icon, templates):
     return best_element, best_confidence
 
 
+def diagnose_element_matches(icon, templates):
+    """
+    Prints the best match confidence for every element template
+    against both the original and yellow-cleaned icon.
+    This is diagnostic only and does not change recognition.
+    """
+
+    hsv = cv2.cvtColor(icon, cv2.COLOR_BGR2HSV)
+
+    lower_yellow = np.array([15, 80, 100])
+    upper_yellow = np.array([40, 255, 255])
+
+    yellow_mask = cv2.inRange(
+        hsv,
+        lower_yellow,
+        upper_yellow
+    )
+
+    cleaned_icon = icon.copy()
+
+    if cv2.countNonZero(yellow_mask) > 0:
+        cleaned_icon = cv2.inpaint(
+            cleaned_icon,
+            yellow_mask,
+            3,
+            cv2.INPAINT_TELEA
+        )
+
+    scales = [
+        0.70,
+        0.75,
+        0.80,
+        0.85,
+        0.90,
+        0.95,
+        1.00,
+        1.05,
+        1.10,
+        1.15,
+        1.20,
+        1.25,
+        1.30,
+    ]
+
+    diagnostics = []
+
+    for element, original_template in templates.items():
+
+        template = cv2.GaussianBlur(
+            original_template,
+            (3, 3),
+            0
+        )
+
+        original_height, original_width = template.shape[:2]
+
+        best_original = 0.0
+        best_cleaned = 0.0
+        best_original_scale = None
+        best_cleaned_scale = None
+
+        for scale in scales:
+
+            new_width = int(original_width * scale)
+            new_height = int(original_height * scale)
+
+            if new_width < 5 or new_height < 5:
+                continue
+
+            if (
+                new_width > icon.shape[1]
+                or new_height > icon.shape[0]
+            ):
+                continue
+
+            resized = cv2.resize(
+                template,
+                (new_width, new_height),
+                interpolation=cv2.INTER_AREA
+            )
+
+            original_result = cv2.matchTemplate(
+                icon,
+                resized,
+                cv2.TM_CCOEFF_NORMED
+            )
+
+            _, original_confidence, _, _ = cv2.minMaxLoc(
+                original_result
+            )
+
+            if original_confidence > best_original:
+                best_original = original_confidence
+                best_original_scale = scale
+
+            cleaned_result = cv2.matchTemplate(
+                cleaned_icon,
+                resized,
+                cv2.TM_CCOEFF_NORMED
+            )
+
+            _, cleaned_confidence, _, _ = cv2.minMaxLoc(
+                cleaned_result
+            )
+
+            if cleaned_confidence > best_cleaned:
+                best_cleaned = cleaned_confidence
+                best_cleaned_scale = scale
+
+        diagnostics.append(
+            (
+                element,
+                best_original,
+                best_original_scale,
+                best_cleaned,
+                best_cleaned_scale,
+            )
+        )
+
+    diagnostics.sort(
+        key=lambda item: max(item[1], item[3]),
+        reverse=True
+    )
+
+    for (
+        element,
+        original_confidence,
+        original_scale,
+        cleaned_confidence,
+        cleaned_scale,
+    ) in diagnostics:
+        print(
+            f"[DIAG] {element.upper():<10} "
+            f"original={original_confidence:.2f} "
+            f"@{original_scale if original_scale is not None else '-'} "
+            f"cleaned={cleaned_confidence:.2f} "
+            f"@{cleaned_scale if cleaned_scale is not None else '-'}"
+        )
+
+    print("[DIAG] ------------------------------")
+
+
 def detect_moves():
 
     print("[MOVE] Scanning moves left to right...")
@@ -312,6 +454,11 @@ def detect_moves():
         )
 
         element, confidence = detect_element(
+            icon,
+            templates
+        )
+
+        diagnose_element_matches(
             icon,
             templates
         )
