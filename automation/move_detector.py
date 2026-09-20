@@ -1,3 +1,5 @@
+# Version: diagnostic move-icon crop logging
+
 import cv2
 import numpy as np
 import pyautogui
@@ -301,6 +303,13 @@ def detect_moves():
             icon_y:icon_y + icon_height,
             icon_x:icon_x + icon_width
         ]
+
+        print(
+            f"[MOVE] Move {move_number}: "
+            f"slot=({slot_x},{slot_y}) "
+            f"icon=({icon_x},{icon_y}) "
+            f"size={icon.shape[1]}x{icon.shape[0]}"
+        )
 
         element, confidence = detect_element(
             icon,
